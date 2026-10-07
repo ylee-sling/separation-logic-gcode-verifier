@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from cad_extractor import AnalyticFeature, GridBox, pad_feature
+from cad_extractor import AABB, AnalyticFeature, GridBox, SolidFeature, pad_feature
 from main_loop import MAX_ITERATIONS, _DRAFT_COLLIDING, LLM_Agent, run_neuro_symbolic_pipeline
 from parser import Parser
 from sl_feedback_generator import (
@@ -111,3 +111,15 @@ def test_thin_wall_nominal_removal_faults_padded_proves():
     assert not nominal.proved and nominal.failed_step.block == "N50"
     assert nominal.record.violated_resource == STOCK
     assert verdicts["padded"].proved
+
+
+def test_fixture_solid_is_a_nominal_environment_obstacle():
+    # A planar vise jaw has no analytic face; its solid AABB is the obstacle.
+    jaw = pad_feature(SolidFeature(1, AABB(-300.0, -280.0, -50.0, 50.0, -100.0, -60.0)), float(EPSILON), MU, "Vise_jaw")
+    prover = SLProver(MU)
+    prover.add_environment(jaw.nominal_grid, jaw.name)
+    assert prover.verify(compile_("N10 G00 X-250.0 Y0.0 Z-80.0")).proved   # stops 28 mm short of the jaw
+    result = prover.verify(compile_("N10 G00 X-290.0 Y0.0 Z-80.0"))
+    assert not result.proved and result.record.resource_label == "Vise_jaw"
+    # G00 claims the whole start-to-end box, so the overlap spans the jaw from X-292 and Z-82 up.
+    assert result.b_conflict == GridBox(-2920, -2800, -20, 20, -820, -600)

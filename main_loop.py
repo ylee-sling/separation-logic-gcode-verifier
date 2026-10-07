@@ -44,6 +44,7 @@ from cad_extractor import (
     AnalyticFeature,
     GridBox,
     PaddedObstacle,
+    extract_solids,
     extract_step,
     format_obstacle_bounds,
     grid_box_of,
@@ -101,6 +102,13 @@ class PipelineConfig:
                        Environment. A real STEP part also yields cylinders for its own bores,
                        which are not fixtures. None means every extracted feature becomes one.
     step_file        : STEP file to ground from; None uses the mock Clamp_1 (no OpenCASCADE needed).
+                       The mock is synthetic: the real CTC-01 surface #006 is a concave half-bore
+                       of the part at Z ∈ [-50, 0], not a clamp.
+    fixture_step_file: STEP file of the fixtures (clamps, vise jaws, plates) placed in G54. Each
+                       solid becomes one nominal AABB in the Environment heap. When this is set
+                       and step_file is not, the mock Clamp_1 is not added.
+    fixture_solids   : solid index -> obstacle name. Only these solids become Environment, so a
+                       part that is also in the fixture file can be left out. None means every solid.
     """
 
     mu: int = 10
@@ -111,6 +119,8 @@ class PipelineConfig:
     tool_length_mm: str = "30.0"
     safe_z_mm: str = "50.0"
     step_file: Optional[str] = None
+    fixture_step_file: Optional[str] = None
+    fixture_solids: Optional[Mapping[int, str]] = None
     fixture_features: Optional[Mapping[int, str]] = field(default_factory=lambda: {6: "Clamp_1"})
     stock_mm: Tuple[AABB, ...] = ()
     max_iterations: int = MAX_ITERATIONS
@@ -144,11 +154,18 @@ def ground_workspace(config: PipelineConfig) -> Workspace:
     discretized machine limits, stock and tool."""
     if config.step_file:
         features = extract_step(config.step_file).features()
+    elif config.fixture_step_file:
+        features = []
     else:
         features = [_mock_clamp_feature()]
     if config.fixture_features is not None:
         features = [f for f in features if f.index in config.fixture_features]
     obstacles = tuple(pad_features(features, float(config.epsilon_mm), config.mu, names=config.fixture_features))
+    if config.fixture_step_file:
+        solids = extract_solids(config.fixture_step_file)
+        if config.fixture_solids is not None:
+            solids = tuple(s for s in solids if s.index in config.fixture_solids)
+        obstacles += tuple(pad_features(solids, float(config.epsilon_mm), config.mu, names=config.fixture_solids))
 
     (x0, x1), (y0, y1), (z0, z1) = config.machine_limits_mm
     limits = AABB(float(x0), float(x1), float(y0), float(y1), float(z0), float(z1))

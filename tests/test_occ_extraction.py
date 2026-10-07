@@ -10,14 +10,18 @@ import pytest
 
 pytest.importorskip("OCC.Core.BRepPrimAPI")
 
+from OCC.Core.BRep import BRep_Builder
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut
+from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.IFSelect import IFSelect_RetDone
 from OCC.Core.STEPControl import STEPControl_AsIs, STEPControl_Writer
-from OCC.Core.gp import gp_Ax2, gp_Dir, gp_Pnt
+from OCC.Core.TopoDS import TopoDS_Compound
+from OCC.Core.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf
 
-from cad_extractor import extract_step
+from cad_extractor import extract_solids, extract_step
+from main_loop import PipelineConfig, build_system_prompt, ground_workspace, run_neuro_symbolic_pipeline
 
 try:  # pythonocc >= 7.7.1
     from OCC.Core.BRepBndLib import brepbndlib
@@ -92,3 +96,56 @@ def test_tilted_cylinder_aabb_matches_occ_optimal_box(tmp_path):
     _add_optimal(shape, reference, False, False)  # exact geometry, no triangulation or tolerance
     xmin, ymin, zmin, xmax, ymax, zmax = reference.Get()
     assert_vec(aabb_tuple(feature.nominal_aabb()), (xmin, xmax, ymin, ymax, zmin, zmax), tol=1e-3)
+
+
+def box(corner, size):
+    return BRepPrimAPI_MakeBox(gp_Pnt(*corner), *size).Shape()
+
+
+def compound(*shapes):
+    result, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(result)
+    for shape in shapes:
+        builder.Add(result, shape)
+    return result
+
+
+def test_fixture_solids_get_one_aabb_each(tmp_path):
+    angle = math.radians(30)
+    rotation = gp_Trsf()
+    rotation.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), angle)
+    rotated = BRepBuilderAPI_Transform(box((100, 0, 0), (20, 10, 5)), rotation, True).Shape()
+    fixtures = compound(
+        box((-300, -50, -100), (20, 100, 40)),     # vise jaw 1
+        box((280, -50, -100), (20, 100, 40)),      # vise jaw 2
+        rotated,                                   # strap clamp rotated 30° about Z
+    )
+    solids = extract_solids(to_step(fixtures, tmp_path, "fixtures"))
+    assert [s.index for s in solids] == [1, 2, 3]
+    assert all(s.kind == "SOLID" for s in solids)
+    assert_vec(aabb_tuple(solids[0].aabb), (-300, -280, -50, 50, -100, -60), tol=1e-5)
+    assert_vec(aabb_tuple(solids[1].aabb), (280, 300, -50, 50, -100, -60), tol=1e-5)
+
+    c, s_ = math.cos(angle), math.sin(angle)
+    corners = [(x * c - y * s_, x * s_ + y * c, z) for x in (100, 120) for y in (0, 10) for z in (0, 5)]
+    expected = tuple(f(p[i] for p in corners) for i in range(3) for f in (min, max))
+    got = aabb_tuple(solids[2].aabb)
+    lows, highs = got[0::2], got[1::2]
+    assert all(lo <= e for lo, e in zip(lows, expected[0::2]))      # contains the solid
+    assert all(hi >= e for hi, e in zip(highs, expected[1::2]))
+    assert_vec(got, expected, tol=1e-3)                              # and is tight
+
+
+def test_pipeline_grounded_from_fixture_step(tmp_path):
+    clamp = box((-265, -20, -100), (40, 40, 30))   # same envelope as the mock Clamp_1
+    part = box((-100, -100, -100), (200, 200, 50))  # in the file but not a fixture
+    path = to_step(compound(clamp, part), tmp_path, "setup")
+    config = PipelineConfig(fixture_step_file=path, fixture_solids={1: "Clamp_1"})
+    result = run_neuro_symbolic_pipeline("park next to Clamp_1", config, verbose=False)
+    assert result.verified and len(result.iterations) == 2
+    first = result.iterations[0]
+    assert first.outcome == "SPATIAL_DATA_RACE" and first.record.resource_label == "Clamp_1"
+    workspace = ground_workspace(config)
+    assert [o.name for o in workspace.obstacles] == ["Clamp_1"]   # no mock clamp, part filtered out
+    prompt = build_system_prompt(workspace)
+    assert "- Clamp_1 (Derived from CAD Solid #001): " in prompt and "#002" not in prompt

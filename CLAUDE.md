@@ -21,6 +21,7 @@ Collisions (Spatial Data Races) go back to the LLM as B_conflict feedback until 
   `python sl_feedback_generator.py`, `python cad_extractor.py`, `python parser.py`, `python sl_prover.py`, `python main_loop.py`
 - Tests: `pytest -q`
 - Real STEP extraction: `python cad_extractor.py <file.stp> --epsilon 2.0 --mu 10 --json rag.json`
+- Fixture STEP (one AABB per solid): `python cad_extractor.py <fixtures.stp> --solids --json rag.json`
 
 ## Environment
 
@@ -65,12 +66,15 @@ A change that "simplifies" one of them is a safety regression, not a cleanup.
     - Point tool: B_conflict = X[-2470, -2250] Y[-20, 120] Z[-820, -700].
     - T01 R5 × 30 mm end mill (`main_loop`): B_conflict = X[-2521, -2250] Y[-71, 171] Z[-820, -700].
   - `G00 X-25.0 Y0.0 Z-80.0` stops about 200 mm short of Clamp_1 and must be **proved safe**.
-- **Never executed against real OpenCASCADE:** `extract_step()`, `_classify_face()`, `_convexity()`, `_count_subshapes()`.
-  Validate them on a generated STEP (known cylinder boss plus bore) before trusting results from real parts.
+  - Clamp_1 is a **synthetic** scenario. The real CTC-01 surface #006 is a concave half-bore at Z[-50, 0], not a clamp.
+    Keep the mock and its values as a regression test. Real fixtures come from `fixture_step_file`.
+- The OpenCASCADE path (`extract_step()`, `_classify_face()`, `_convexity()`, `_count_subshapes()`, `extract_solids()`)
+  is covered by `tests/test_occ_extraction.py` against generated STEP files (pythonocc-core 8.0.1.1).
 
 ## Known gaps (not bugs)
 
-- Only cylindrical and spherical faces become obstacles. Planar fixtures need per-solid AABBs (todo).
+- Only cylindrical and spherical part faces become obstacles. Fixtures use per-solid AABBs (`extract_solids()`).
+- The part is not loaded as Stock from STEP. `stock_mm` boxes are given by hand.
 - Cells the tool only partly cuts are counted as removed (error < 1/μ mm).
 - `LLM_Agent` is a scripted stub. A real model call replaces only `generate_code()`.
 - The Figure 3 counts in Paper 2 are TopExp_Explorer visits, not unique sub-shapes.

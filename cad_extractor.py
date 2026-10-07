@@ -64,7 +64,7 @@ import json
 import math
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
 from numbers import Integral, Real
 from types import SimpleNamespace
@@ -75,6 +75,7 @@ __all__ = [
     "AABB",
     "GridBox",
     "AnalyticFeature",
+    "SolidFeature",
     "SurfaceRecord",
     "TopologyMetrics",
     "ExtractionReport",
@@ -88,6 +89,7 @@ __all__ = [
     "cylinder_aabb",
     "sphere_aabb",
     "extract_step",
+    "extract_solids",
     "pad_feature",
     "pad_features",
     "format_obstacle_bounds",
@@ -445,6 +447,27 @@ class AnalyticFeature:
 
 
 @dataclass(frozen=True)
+class SolidFeature:
+    """One solid of a fixture STEP file, bounded by its AABB.
+
+    Clamps, vise jaws and fixture plates are mostly planar, so no analytic face bounds them.
+    The whole solid becomes the obstacle instead. An AABB contains its solid, so this is
+    conservative: it can only reject more programs, never accept a colliding one.
+
+    index : 1-based solid index in TopExp_Explorer order (the "Solid #001" numbering).
+    aabb  : AABB of the solid in mm, enlarged by the shape tolerance (see extract_solids()).
+    """
+
+    index: int
+    aabb: AABB
+    kind: str = field(default="SOLID", init=False)
+    convexity: Optional[str] = field(default=None, init=False)
+
+    def nominal_aabb(self) -> AABB:
+        return self.aabb
+
+
+@dataclass(frozen=True)
 class SurfaceRecord:
     """One face visited during traversal (one line group of the Figure 3 report)."""
 
@@ -537,6 +560,7 @@ def _load_occ() -> SimpleNamespace:
     module (and parser.py, which reuses s_grid) works without OpenCASCADE installed."""
     try:
         import OCC.Core.GeomAbs as GeomAbs
+        from OCC.Core.Bnd import Bnd_Box
         from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
         from OCC.Core.IFSelect import IFSelect_RetDone
         from OCC.Core.STEPControl import STEPControl_Reader
@@ -545,6 +569,7 @@ def _load_occ() -> SimpleNamespace:
             TopAbs_FACE,
             TopAbs_FORWARD,
             TopAbs_REVERSED,
+            TopAbs_SOLID,
             TopAbs_VERTEX,
         )
         from OCC.Core.TopExp import TopExp_Explorer
@@ -569,6 +594,14 @@ def _load_occ() -> SimpleNamespace:
         except ImportError:
             face_cast = None
 
+    # BRepBndLib: `brepbndlib.AddOptimal` in pythonocc >= 7.7.1, `brepbndlib_AddOptimal` before that.
+    try:
+        from OCC.Core.BRepBndLib import brepbndlib
+
+        add_optimal = brepbndlib.AddOptimal
+    except ImportError:
+        from OCC.Core.BRepBndLib import brepbndlib_AddOptimal as add_optimal  # type: ignore[no-redef]
+
     geomabs_names = {
         "GeomAbs_Plane": "PLANE",
         "GeomAbs_Cylinder": "CYLINDER",
@@ -587,6 +620,8 @@ def _load_occ() -> SimpleNamespace:
     }
 
     return SimpleNamespace(
+        Bnd_Box=Bnd_Box,
+        add_optimal=add_optimal,
         BRepAdaptor_Surface=BRepAdaptor_Surface,
         IFSelect_RetDone=IFSelect_RetDone,
         STEPControl_Reader=STEPControl_Reader,
@@ -594,6 +629,7 @@ def _load_occ() -> SimpleNamespace:
         TopAbs_FACE=TopAbs_FACE,
         TopAbs_FORWARD=TopAbs_FORWARD,
         TopAbs_REVERSED=TopAbs_REVERSED,
+        TopAbs_SOLID=TopAbs_SOLID,
         TopAbs_VERTEX=TopAbs_VERTEX,
         TopExp_Explorer=TopExp_Explorer,
         TopTools_IndexedMapOfShape=TopTools_IndexedMapOfShape,
@@ -672,6 +708,21 @@ def _classify_face(occ: SimpleNamespace, face, index: int) -> SurfaceRecord:
     return SurfaceRecord(index, kind)
 
 
+def _read_step(occ: SimpleNamespace, file_path: str):
+    """STEPControl_Reader -> ReadFile -> TransferRoots -> OneShape (Listing 1, step 1)."""
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"STEP file not found: {file_path}")
+    reader = occ.STEPControl_Reader()
+    status = reader.ReadFile(file_path)
+    if status != occ.IFSelect_RetDone:
+        raise StepReadError(f"OpenCASCADE failed to parse this STEP file (status {status}): {file_path}")
+    reader.TransferRoots()
+    shape = reader.OneShape()
+    if shape is None or shape.IsNull():
+        raise StepReadError(f"STEP file transferred no geometry: {file_path}")
+    return shape
+
+
 def extract_step(file_path: str) -> ExtractionReport:
     """Load a STEP file and extract its B-Rep topology and analytic surface parameters.
 
@@ -681,18 +732,8 @@ def extract_step(file_path: str) -> ExtractionReport:
       3. Geometric adaptation: BRepAdaptor_Surface classifies each face; cylinders and spheres
          get their exact parameters (plus axis and axial range for cylinders).
     """
-    if not os.path.isfile(file_path):
-        raise FileNotFoundError(f"STEP file not found: {file_path}")
     occ = _load_occ()
-
-    reader = occ.STEPControl_Reader()
-    status = reader.ReadFile(file_path)
-    if status != occ.IFSelect_RetDone:
-        raise StepReadError(f"OpenCASCADE failed to parse this STEP file (status {status}): {file_path}")
-    reader.TransferRoots()
-    shape = reader.OneShape()
-    if shape is None or shape.IsNull():
-        raise StepReadError(f"STEP file transferred no geometry: {file_path}")
+    shape = _read_step(occ, file_path)
 
     n_vertices, v_visits = _count_subshapes(occ, shape, occ.TopAbs_VERTEX)
     n_edges, e_visits = _count_subshapes(occ, shape, occ.TopAbs_EDGE)
@@ -716,6 +757,28 @@ def extract_step(file_path: str) -> ExtractionReport:
     return ExtractionReport(os.path.basename(file_path), topology, tuple(surfaces))
 
 
+def extract_solids(file_path: str) -> Tuple[SolidFeature, ...]:
+    """One AABB per solid in a fixture STEP file (clamps, vise jaws, fixture plates).
+
+    The box comes from BRepBndLib::AddOptimal on the exact geometry (no triangulation), enlarged
+    by the shape tolerance, so it contains the solid even when the file's tolerances are loose.
+    Assembly instances are visited with their placement, so each placed copy is its own solid.
+    """
+    occ = _load_occ()
+    shape = _read_step(occ, file_path)
+    solids: List[SolidFeature] = []
+    explorer = occ.TopExp_Explorer(shape, occ.TopAbs_SOLID)
+    while explorer.More():
+        box = occ.Bnd_Box()
+        occ.add_optimal(explorer.Current(), box, False, True)  # exact geometry, + shape tolerance
+        explorer.Next()
+        if box.IsVoid():
+            raise StepReadError(f"solid #{len(solids) + 1:03d} has an empty bounding box: {file_path}")
+        x0, y0, z0, x1, y1, z1 = box.Get()
+        solids.append(SolidFeature(len(solids) + 1, AABB(x0, x1, y0, y1, z0, z1)))
+    return tuple(solids)
+
+
 # ======================================================================================
 # Minkowski padding -> RAG obstacle bounds
 # ======================================================================================
@@ -730,7 +793,7 @@ class PaddedObstacle:
     """
 
     name: str
-    feature: AnalyticFeature
+    feature: Union[AnalyticFeature, SolidFeature]
     epsilon_mm: float
     epsilon_vox: int
     mu: int
@@ -748,14 +811,17 @@ class PaddedObstacle:
 
     def rag_line(self, decimals: int = 3) -> str:
         """One OBSTACLE_BOUNDS entry in the Figure 4 format."""
+        origin = "CAD Solid" if self.feature.kind == "SOLID" else "CAD Feature"
         return (
-            f"- {self.name} (Derived from CAD Feature {self.source}): "
+            f"- {self.name} (Derived from {origin} {self.source}): "
             f"{self.padded_grid.format_mm(self.mu, decimals)}"
         )
 
     def to_dict(self, decimals: int = 3) -> Dict[str, object]:
         f = self.feature
-        parameters: Dict[str, object] = {"center_xyz": [c + 0.0 for c in f.location], "radius_mm": f.radius}
+        parameters: Dict[str, object] = {}
+        if f.kind in _ANALYTIC_KINDS:
+            parameters.update(center_xyz=[c + 0.0 for c in f.location], radius_mm=f.radius)
         if f.kind == "CYLINDER":
             parameters.update(
                 axis=[c + 0.0 for c in f.axis],
@@ -783,14 +849,16 @@ class PaddedObstacle:
         }
 
 
-def pad_feature(feature: AnalyticFeature, epsilon_mm: float, mu: int, name: Optional[str] = None) -> PaddedObstacle:
-    """Apply the safety margin ε to one extracted feature (Paper 2, Sec. 3.3.2)."""
+def pad_feature(
+    feature: Union[AnalyticFeature, SolidFeature], epsilon_mm: float, mu: int, name: Optional[str] = None
+) -> PaddedObstacle:
+    """Apply the safety margin ε to one extracted feature or solid (Paper 2, Sec. 3.3.2)."""
     mu = _check_mu(mu)
     eps_vox = epsilon_to_voxels(epsilon_mm, mu)
     nominal = feature.nominal_aabb()
     nominal_grid = grid_box_of(nominal, mu)
     return PaddedObstacle(
-        name=name or f"Obstacle_{feature.index:03d}",
+        name=name or f"{'Fixture' if feature.kind == 'SOLID' else 'Obstacle'}_{feature.index:03d}",
         feature=feature,
         epsilon_mm=float(epsilon_mm),
         epsilon_vox=eps_vox,
@@ -803,14 +871,14 @@ def pad_feature(feature: AnalyticFeature, epsilon_mm: float, mu: int, name: Opti
 
 
 def pad_features(
-    features: Iterable[AnalyticFeature],
+    features: Iterable[Union[AnalyticFeature, SolidFeature]],
     epsilon_mm: float,
     mu: int,
     *,
     names: Optional[Mapping[int, str]] = None,
     include_concave: bool = True,
 ) -> List[PaddedObstacle]:
-    """Pad every extracted feature. `names` maps a face index to a label (e.g. {6: "Clamp_1"}).
+    """Pad every extracted feature. `names` maps a face (or solid) index to a label (e.g. {6: "Clamp_1"}).
 
     Concave faces (bores) are kept by default. Treating a hole as an obstacle is
     conservative, whereas dropping a boss would be unsafe.
@@ -957,6 +1025,18 @@ def _run_mock(epsilon_mm: float, mu: int) -> None:
         tool_hits_padded_env = any(env.dilate(k).contains(t) for t in tool)
         assert padded_tool_hits == tool_hits_padded_env
 
+    # Fixture solids (per-solid AABB) go through the same padding: nominal box for the heap,
+    # padded box for the RAG prompt.
+    jaw = pad_feature(SolidFeature(1, AABB(-300.0, -280.0, -50.0, 50.0, -100.0, -60.0)), 2.0, 10, "Vise_jaw")
+    assert jaw.nominal_grid == GridBox(-3000, -2800, -500, 500, -1000, -600)
+    assert jaw.padded_grid == GridBox(-3020, -2780, -520, 520, -1020, -580)
+    assert jaw.rag_line() == (
+        "- Vise_jaw (Derived from CAD Solid #001): "
+        "X ∈ [-302.000, -277.900], Y ∈ [-52.000, 52.100], Z ∈ [-102.000, -57.900]"
+    )
+    assert jaw.to_dict()["surface_type"] == "SOLID" and jaw.to_dict()["parameters"] == {}
+    assert pad_feature(SolidFeature(2, AABB(0, 1, 0, 1, 0, 1)), 2.0, 10).name == "Fixture_002"
+
     print("\n[self-check] all assertions passed")
 
 
@@ -966,24 +1046,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--epsilon", type=float, default=2.0, help="safety margin ε in mm (default 2.0)")
     parser.add_argument("--mu", type=int, default=10, help="grid multiplier μ (default 10, i.e. 0.1 mm voxels)")
     parser.add_argument("--json", metavar="PATH", help="write the RAG obstacle payload to this JSON file")
+    parser.add_argument("--solids", action="store_true",
+                        help="fixture file: one AABB obstacle per solid instead of per analytic face")
     args = parser.parse_args(argv)
 
     if args.step_file is None:
         _run_mock(args.epsilon, args.mu)
         return 0
 
-    report = extract_step(args.step_file)
-    text = report.format_text()
-    print(text)
-
-    # Like Listing 1, also save the plain-text report in the current working directory.
-    base = os.path.splitext(os.path.basename(args.step_file))[0]
-    report_path = os.path.join(os.getcwd(), base + "_report.txt")
-    with open(report_path, "w", encoding="utf-8") as handle:
-        handle.write(text + "\n")
-    print(f"\nSaved plain text report to: {report_path}")
-
-    obstacles = pad_features(report.features(), args.epsilon, args.mu)
+    if args.solids:
+        solids = extract_solids(args.step_file)
+        print(f"Loading STEP file: {args.step_file}...\n\n--- SOLIDS DETECTED: {len(solids)} ---")
+        for solid in solids:
+            print(f" Solid #{solid.index:03d}: AABB {solid.aabb.format()}")
+        obstacles = pad_features(solids, args.epsilon, args.mu)
+    else:
+        obstacles = _report_faces(args.step_file, args.epsilon, args.mu)
     print()
     print(format_obstacle_bounds(obstacles, args.epsilon))
 
@@ -992,6 +1070,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             handle.write(_compact_json(build_rag_payload(obstacles, args.epsilon, args.mu)) + "\n")
         print(f"\nSaved RAG obstacle payload to: {args.json}")
     return 0
+
+
+def _report_faces(step_file: str, epsilon_mm: float, mu: int) -> List[PaddedObstacle]:
+    """Listing 1 face report (printed and saved next to the cwd), then the padded analytic faces."""
+    report = extract_step(step_file)
+    text = report.format_text()
+    print(text)
+
+    # Like Listing 1, also save the plain-text report in the current working directory.
+    base = os.path.splitext(os.path.basename(step_file))[0]
+    report_path = os.path.join(os.getcwd(), base + "_report.txt")
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(text + "\n")
+    print(f"\nSaved plain text report to: {report_path}")
+    return pad_features(report.features(), epsilon_mm, mu)
 
 
 if __name__ == "__main__":

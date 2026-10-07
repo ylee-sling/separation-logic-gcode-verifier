@@ -97,6 +97,13 @@ Example with ε = 2 mm, μ = 10 (from `python cad_extractor.py`):
 | RAG box, padded (Z³) | X [-2670, -2230] Y [-220, 220] Z [-1020, -680] |
 | RAG bounds shown to the LLM (mm) | X [-267.000, -222.900] Y [-22.000, 22.100] Z [-102.000, -67.900] |
 
+Clamp_1 is a **synthetic mock**. Figure 3 gives only the radius and centre of surface #006, and
+the mock *assumes* a +Z axis, a 30 mm height and a convex boss. Reading the real
+`nist_ctc_01_asme1_rd.stp` gives R20 at (-245, 0, -100), matching Figure 3, but the face is a
+**concave 180° half-bore of the part** with V ∈ [50, 100], so Z ∈ [-50, 0]. It is not a clamp.
+The mock stays as a fixed regression scenario. Real fixtures come from a fixture STEP file
+(see [Fixtures](#fixtures-from-a-step-file)).
+
 **2. G01 dilates by ε + 1 (`bresenham_margin=1`).**
 G01 footprints follow a Bresenham line. A Bresenham path can skip a cell that the continuous
 segment actually crosses (the `parser.py` docstring has an example). One extra voxel of dilation
@@ -187,17 +194,55 @@ pytest -q
 
 # Real STEP extraction: report + RAG payload
 python cad_extractor.py part.stp --epsilon 2.0 --mu 10 --json rag.json
+
+# Fixture STEP: one AABB obstacle per solid
+python cad_extractor.py fixtures.stp --solids --json rag.json
 ```
+
+### Fixtures from a STEP file
+
+Clamps, vise jaws and fixture plates are mostly planar, so no analytic face bounds them.
+`extract_solids()` turns each solid of a fixture STEP file into one `SolidFeature`. Its AABB
+comes from `BRepBndLib::AddOptimal` on the exact geometry (no triangulation), enlarged by the
+shape tolerance. The box contains the solid, so it is conservative. It goes through the same
+`pad_feature()` as analytic faces: the nominal box goes into the Environment heap and the padded
+box into `OBSTACLE_BOUNDS`.
+
+The fixtures must be modelled in G54, which is the CAD origin. Run `--solids` first to see the
+solid indices, then select the fixtures and name them:
+
+```python
+config = PipelineConfig(
+    fixture_step_file="setup.stp",
+    fixture_solids={1: "Vise_jaw_L", 2: "Vise_jaw_R"},  # omit the part's own solid; None = all
+    machine_limits_mm=(("-450", "450"), ("-250", "250"), ("-150", "150")),
+)
+run_neuro_symbolic_pipeline(intent, config)
+```
+
+When `fixture_step_file` is set without `step_file`, the mock Clamp_1 is not added. Only solids
+become obstacles. Wireframe or PMI geometry in the file is ignored. The NIST CTC-01 file, for
+example, has one solid with the box X [-400, 400] Y [-225, 225] Z [-100, 50] plus a separate
+wireframe compound that reaches X [-590, 580]. That part exceeds the default
+`machine_limits_mm` in Y (±200).
 
 `tests/test_integration.py` needs no OpenCASCADE. `tests/test_occ_extraction.py` builds solids in
 OpenCASCADE, writes them to STEP and checks `extract_step()` against the known geometry. It
 covers a boss and a bore (convexity), Euler V − E + F = 2, and the AABB of a tilted cylinder
-against OCC's optimal bounding box.
+against OCC's optimal bounding box. It also covers per-solid fixture AABBs (including a rotated
+solid) and a full pipeline run grounded from a generated fixture STEP.
+
+The OCC path agrees with OpenCASCADE's own solid classifier on NIST CTC-01. All 57 cylinder faces
+get the same convexity from both. The file's unique counts are 433 / 468 / 139, so
+V − E + F = 104 rather than 2, because its 433 vertex entities lie at only 297 distinct points
+(duplicate, unshared vertices in the STEP). The explorer visits match Figure 3 exactly:
+1734 / 856 / 139.
 
 ## Known gaps (not bugs)
 
-- Only cylindrical and spherical faces become obstacles. Planar fixtures need per-solid AABBs
-  (todo).
+- Part faces: only cylindrical and spherical faces become obstacles. Fixtures are covered by
+  per-solid AABBs (`--solids`, `fixture_step_file`), which over-approximate non-box solids.
+- The part itself is not loaded as Stock from STEP yet. Give `stock_mm` boxes by hand.
 - Cells the tool only partly cuts are counted as removed (error < 1/μ mm).
 - `LLM_Agent` is a scripted stub. A real model call replaces only `generate_code()`.
 - The Figure 3 counts in Paper 2 (1734 / 856 / 139) are `TopExp_Explorer` visits, not unique
