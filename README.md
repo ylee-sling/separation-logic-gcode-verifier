@@ -285,3 +285,16 @@ Conformance Testing Project. It is included unmodified, for testing only.
 - The Figure 3 counts in Paper 2 (1734 / 856 / 139) are `TopExp_Explorer` visits, not unique
   sub-shapes.
 - G54 work coordinates equal the CAD origin. There is no work-offset transform yet.
+
+## License
+
+Copyright (C) 2026 Yeonseok Lee
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version. It is distributed in the hope that it will be
+useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE) for the full text.
+
+The GPL covers the code and documentation of this repository. `nist_ctc_01_asme1_rd.stp` is
+third-party data from NIST (see [Test data](#test-data)) and is not covered by this license.
