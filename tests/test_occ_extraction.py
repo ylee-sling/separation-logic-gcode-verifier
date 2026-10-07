@@ -149,3 +149,27 @@ def test_pipeline_grounded_from_fixture_step(tmp_path):
     assert [o.name for o in workspace.obstacles] == ["Clamp_1"]   # no mock clamp, part filtered out
     prompt = build_system_prompt(workspace)
     assert "- Clamp_1 (Derived from CAD Solid #001): " in prompt and "#002" not in prompt
+
+
+def test_ctc01_vise_example(tmp_path):
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    nist = repo / "nist_ctc_01_asme1_rd.stp"
+    if not nist.is_file():
+        pytest.skip("nist_ctc_01_asme1_rd.stp is not in the repository root")
+    sys.path.insert(0, str(repo / "examples"))
+    try:
+        import ctc01_vise_setup as example
+    finally:
+        sys.path.pop(0)
+    setup = example.build_setup_step(str(nist), str(tmp_path / "setup.stp"))
+    assert [s.index for s in extract_solids(setup)] == [1, 2, 3, 4]
+    result = example.run(verbose=False, setup_step=setup)
+    assert result.verified and len(result.iterations) == 2
+    first = result.iterations[0]
+    assert first.record.resource_label == "Vise_jaw_L" and first.record.line_number == "N80"
+    box = first.record.bounding_box
+    assert (box.x_min, box.x_max, box.y_min, box.y_max, box.z_min, box.z_max) == (
+        -71, 71, -2521, -2379, -620, -500)

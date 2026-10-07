@@ -107,6 +107,8 @@ class PipelineConfig:
     fixture_step_file: STEP file of the fixtures (clamps, vise jaws, plates) placed in G54. Each
                        solid becomes one nominal AABB in the Environment heap. When this is set
                        and step_file is not, the mock Clamp_1 is not added.
+    home_mm          : tool-tip position before the first block (Σ0). The default is the G54
+                       origin; a setup whose part covers the origin must start the tool above it.
     fixture_solids   : solid index -> obstacle name. Only these solids become Environment, so a
                        part that is also in the fixture file can be left out. None means every solid.
     """
@@ -118,6 +120,7 @@ class PipelineConfig:
     tool_radius_mm: str = "5.0"
     tool_length_mm: str = "30.0"
     safe_z_mm: str = "50.0"
+    home_mm: Tuple[str, str, str] = ("0", "0", "0")
     step_file: Optional[str] = None
     fixture_step_file: Optional[str] = None
     fixture_solids: Optional[Mapping[int, str]] = None
@@ -138,7 +141,7 @@ class Workspace:
     epsilon_vox: int
 
     def new_parser(self) -> Parser:
-        return Parser(self.config.mu, self.config.epsilon_mm, self.tool)
+        return Parser(self.config.mu, self.config.epsilon_mm, self.tool, home_mm=self.config.home_mm)
 
     def new_prover(self) -> SLProver:
         prover = SLProver(self.config.mu, workspace=self.workspace_grid)
@@ -197,6 +200,10 @@ def build_system_prompt(workspace: Workspace) -> str:
         f"ACTIVE_TOOL: {c.tool_id} (Flat Endmill, Radius={c.tool_radius_mm}mm, Length={c.tool_length_mm}mm; "
         "coordinates are tool-tip positions)",
         f"SAFE_Z_RETRACT: Z{c.safe_z_mm}",
+    ]
+    if any(Decimal(v) != 0 for v in c.home_mm):
+        lines.append(f"TOOL_HOME: X{c.home_mm[0]} Y{c.home_mm[1]} Z{c.home_mm[2]} (tool tip before the first block)")
+    lines += [
         format_obstacle_bounds(workspace.obstacles, float(c.epsilon_mm)),
     ]
     if workspace.stock_grid:

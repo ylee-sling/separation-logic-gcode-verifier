@@ -123,3 +123,13 @@ def test_fixture_solid_is_a_nominal_environment_obstacle():
     assert not result.proved and result.record.resource_label == "Vise_jaw"
     # G00 claims the whole start-to-end box, so the overlap spans the jaw from X-292 and Z-82 up.
     assert result.b_conflict == GridBox(-2920, -2800, -20, 20, -820, -600)
+
+
+def test_home_position_reaches_parser_and_prompt():
+    from main_loop import PipelineConfig, build_system_prompt, ground_workspace
+
+    default = ground_workspace(PipelineConfig())
+    assert "TOOL_HOME" not in build_system_prompt(default)
+    raised = ground_workspace(PipelineConfig(home_mm=("0", "0", "150")))
+    assert raised.new_parser().compile("").v_home.bbox.z_min == 1500 - 20   # tip at Z150, minus ε
+    assert "TOOL_HOME: X0 Y0 Z150" in build_system_prompt(raised)

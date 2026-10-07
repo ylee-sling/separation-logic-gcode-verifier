@@ -220,11 +220,37 @@ config = PipelineConfig(
 run_neuro_symbolic_pipeline(intent, config)
 ```
 
+`home_mm` sets the tool-tip position before the first block. The default is the G54 origin. A
+part that covers the origin needs a raised home, or Σ0 is unsatisfiable (`HeapInitError`).
+
 When `fixture_step_file` is set without `step_file`, the mock Clamp_1 is not added. Only solids
 become obstacles. Wireframe or PMI geometry in the file is ignored. The NIST CTC-01 file, for
 example, has one solid with the box X [-400, 400] Y [-225, 225] Z [-100, 50] plus a separate
 wireframe compound that reaches X [-590, 580]. That part exceeds the default
 `machine_limits_mm` in Y (±200).
+
+### Example: CTC-01 in a vise (demonstration setup)
+
+`python examples/ctc01_vise_setup.py` builds `examples/ctc01_vise_setup.stp` from the real
+CTC-01 solid plus three made-up fixture boxes, then runs the loop. The fixtures are two vise
+jaws at Y [-265, -225] and Y [225, 265] (X [-150, 150], Z [-100, -50]) and a base plate at
+Z [-130, -100]. The part's AABB is loaded as Stock. The machine travels X ±500, Y ±350,
+Z [-150, 200], with home at Z150 and SAFE_Z at Z100.
+
+Output of the run:
+
+```
+N80  G00  FAULT, separating conjunction fails against Environment (Vise_jaw_L)
+          B_conflict = X ∈ [-71, 71], Y ∈ [-2521, -2379], Z ∈ [-620, -500]
+...
+{Σ0} C_SL {Σ_final} proved for all 7 motion blocks; 16,612,113 stock voxels removed
+✔ Correct-by-Construction Verified (iteration 2, 2 generator calls)
+```
+
+Writing the drafts showed one rule that matters in practice. After a G01 cut, the tool must leave
+the material **with G01**. Only the nominal sweep is removed, so the material within ε of the
+tool is still in the heap, and a G00 retract from the cut is rejected as a Stock race. That is
+invariant 3 working as intended.
 
 `tests/test_integration.py` needs no OpenCASCADE. `tests/test_occ_extraction.py` builds solids in
 OpenCASCADE, writes them to STEP and checks `extract_step()` against the known geometry. It
