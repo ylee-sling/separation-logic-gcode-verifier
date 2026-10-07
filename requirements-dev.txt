@@ -1,0 +1,5 @@
+# Test dependencies for a plain venv/pip setup (Python >= 3.10).
+# The core pipeline needs nothing beyond the standard library.
+# pythonocc-core (for cad_extractor.extract_step) is NOT on PyPI; install it from
+# conda-forge via environment.yml. Without it, tests/test_occ_extraction.py is skipped.
+pytest>=7.0

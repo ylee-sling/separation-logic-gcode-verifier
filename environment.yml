@@ -1,0 +1,13 @@
+# Conda environment for the neuro-symbolic G-code Evaluator-Refiner.
+#   conda env create -f environment.yml && conda activate sl-gcode
+# The core modules are pure standard-library Python (>= 3.10; on <= 3.9 the built-in
+# `parser` module can shadow parser.py). pythonocc-core is needed only by
+# cad_extractor.extract_step(); it is distributed through conda-forge, not PyPI.
+# Do not substitute cadquery-ocp: it uses the OCP.* namespace, not OCC.Core.*.
+name: sl-gcode
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pythonocc-core>=7.7.1
+  - pytest>=7.0
