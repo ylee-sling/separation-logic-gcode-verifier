@@ -1,8 +1,9 @@
 # Neuro-Symbolic G-code Evaluator-Refiner
 
-A Python prototype of the pipeline in Lee, *Correct-by-Construction G-Code Generation*
-(arXiv:2605.10568), built on Lee, *Separation Logic for Verifying Physical Collisions of CNC
-Programs* (arXiv:2605.10437).
+A Python prototype of the pipeline in *Correct-by-Construction G-Code Generation*
+([Paper 2](#references), arXiv:2605.10568), built on *Separation Logic for Verifying Physical
+Collisions of CNC Programs* ([Paper 1](#references), arXiv:2605.10437). "Paper 1" and "Paper 2"
+refer to these two papers throughout this README and the code comments.
 
 An LLM drafts G-code. A deterministic Separation Logic prover checks every motion block on a
 discrete Spatial Heap in Z³. A collision (a *Spatial Data Race*) is returned to the LLM as a
@@ -285,6 +286,14 @@ Conformance Testing Project. It is included unmodified, for testing only.
 - The Figure 3 counts in Paper 2 (1734 / 856 / 139) are `TopExp_Explorer` visits, not unique
   sub-shapes.
 - G54 work coordinates equal the CAD origin. There is no work-offset transform yet.
+
+## References
+
+- **[Paper 1]** Y. Lee. *Separation Logic for Verifying Physical Collisions of CNC Programs.*
+  arXiv:2605.10437, 2026. https://arxiv.org/abs/2605.10437
+- **[Paper 2]** Y. Lee. *Correct-by-Construction G-Code Generation: A Neuro-Symbolic Approach via
+  Separation Logic.* arXiv:2605.10568, 2026. https://arxiv.org/abs/2605.10568
+- NIST CTC-01 test model: see [Test data](#test-data).
 
 ## License
 
