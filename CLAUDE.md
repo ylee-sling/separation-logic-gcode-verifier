@@ -66,6 +66,8 @@ A change that "simplifies" one of them is a safety regression, not a cleanup.
     - Point tool: B_conflict = X[-2470, -2250] Y[-20, 120] Z[-820, -700].
     - T01 R5 × 30 mm end mill (`main_loop`): B_conflict = X[-2521, -2250] Y[-71, 171] Z[-820, -700].
   - `G00 X-25.0 Y0.0 Z-80.0` stops about 200 mm short of Clamp_1 and must be **proved safe**.
+  - `nist_ctc_01_asme1_rd.stp` is NIST CTC-01 (the Paper 2 Figure 3 reference model), from the NIST MBE PMI
+    Validation and Conformance Testing Project. Keep it unmodified, and keep the citation in README.md "Test data".
   - Clamp_1 is a **synthetic** scenario. The real CTC-01 surface #006 is a concave half-bore at Z[-50, 0], not a clamp.
     Keep the mock and its values as a regression test. Real fixtures come from `fixture_step_file`.
 - The OpenCASCADE path (`extract_step()`, `_classify_face()`, `_convexity()`, `_count_subshapes()`, `extract_solids()`)

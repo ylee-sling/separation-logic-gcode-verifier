@@ -264,6 +264,17 @@ V − E + F = 104 rather than 2, because its 433 vertex entities lie at only 297
 (duplicate, unshared vertices in the STEP). The explorer visits match Figure 3 exactly:
 1734 / 856 / 139.
 
+## Test data
+
+`nist_ctc_01_asme1_rd.stp` is the NIST standard reference model used in Paper 2, Figure 3
+("Truncated extraction report for the NIST standard reference model (nist_ctc_01_asme1_rd.stp)").
+It is Combined Test Case 1 (CTC-01, geometry only) from the NIST MBE PMI Validation and
+Conformance Testing Project. It is included unmodified, for testing only.
+
+> National Institute of Standards and Technology (NIST). MBE PMI Validation and Conformance
+> Testing Project.
+> https://www.nist.gov/ctl/smart-connected-systems-division/smart-connected-manufacturing-systems-group/mbe-pmi-0
+
 ## Known gaps (not bugs)
 
 - Part faces: only cylindrical and spherical faces become obstacles. Fixtures are covered by
